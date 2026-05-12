@@ -54,12 +54,15 @@ const props = defineProps({
 const emit = defineEmits(['camera-change', 'model-click', 'sensor-selected', 'viewer-ready'])
 const containerRef = ref(null)
 const entitiesById = new Map()
+const modelsById = new Map()
 let viewer
 let clickHandler
 let hoverHandler
 let osmBuildings
 let cameraChangedUnsubscribe
 let hoveredEntity
+let isDestroyed = false
+let hasZoomed = false
 
 const popup = reactive({
   visible: false,
@@ -71,6 +74,7 @@ const popup = reactive({
 })
 
 onMounted(() => {
+  isDestroyed = false
   viewer = new Cesium.Viewer(containerRef.value, {
     animation: false,
     baseLayerPicker: true,
@@ -99,7 +103,8 @@ watch(
   () => props.models,
   (models) => {
     if (!viewer) return
-    loadModels(models)
+    loadModels(models, { zoom: false })
+    applyLayers(props.layers)
   },
   { deep: true }
 )
@@ -123,18 +128,36 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  isDestroyed = true
   cameraChangedUnsubscribe?.()
   clickHandler?.destroy()
   hoverHandler?.destroy()
   viewer?.destroy()
   entitiesById.clear()
+  modelsById.clear()
 })
 
-function loadModels(models) {
-  viewer.entities.removeAll()
-  entitiesById.clear()
+function loadModels(models, options = {}) {
+  const { zoom = props.autoZoom && !hasZoomed } = options
+  const activeIds = new Set(models.map((model) => model.id))
+
+  for (const [id, entity] of entitiesById) {
+    if (!activeIds.has(id)) {
+      viewer.entities.remove(entity)
+      entitiesById.delete(id)
+      modelsById.delete(id)
+    }
+  }
 
   const entities = models.map((model) => {
+    modelsById.set(model.id, model)
+    const existing = entitiesById.get(model.id)
+
+    if (existing) {
+      updateModelEntity(existing, model)
+      return existing
+    }
+
     const entity = viewer.entities.add({
       id: model.id,
       name: model.metadata?.name ?? model.id,
@@ -183,8 +206,42 @@ function loadModels(models) {
     return entity
   })
 
-  if (props.autoZoom && entities.length) {
-    viewer.zoomTo(entities, new Cesium.HeadingPitchRange(0, -0.65, 1400))
+  if (zoom && entities.length) {
+    hasZoomed = true
+    void viewer.zoomTo(entities, new Cesium.HeadingPitchRange(0, -0.65, 1400)).catch((error) => {
+      if (!isDestroyed) console.warn('Unable to zoom to Cesium models', error)
+    })
+  }
+}
+
+function updateModelEntity(entity, model) {
+  entity.name = model.metadata?.name ?? model.id
+  entity.position = Cesium.Cartesian3.fromDegrees(model.longitude, model.latitude, model.height ?? 0)
+
+  if (entity.model) {
+    entity.model.uri = model.url
+    entity.model.show = props.layers.models !== false
+    entity.model.color = statusColor(getModelStatusValue(model))
+    entity.model.minimumPixelSize = model.minimumPixelSize ?? 72
+    entity.model.maximumScale = model.maximumScale ?? 240
+    entity.model.scale = model.scale ?? 1
+  }
+
+  if (entity.point) {
+    entity.point.show = props.layers.sensors !== false
+    entity.point.pixelSize = entity === hoveredEntity ? 14 : pulsingSize(model)
+    entity.point.color = pulsingColor(model)
+  }
+
+  if (entity.label) {
+    entity.label.show = props.layers.sensors !== false && props.showLabels
+    entity.label.text = model.metadata?.name ?? model.id
+  }
+
+  entity.properties = {
+    modelId: model.id,
+    sensorId: getSensorId(model),
+    metadata: model.metadata ?? {}
   }
 }
 
@@ -194,16 +251,23 @@ function bindHoverHandler() {
     const picked = viewer.scene.pick(movement.endPosition)
     const entity = picked?.id
     const modelId = entity?.properties?.modelId?.getValue()
-    const model = props.models.find((item) => item.id === modelId)
-
-    clearHover()
+    const model = modelsById.get(modelId)
 
     if (!model || !entity) {
-      popup.visible = false
-      viewer.canvas.style.cursor = ''
+      clearHover()
       return
     }
 
+    if (hoveredEntity !== entity) {
+      clearHover()
+      setHover(entity)
+    }
+
+    updatePopup(movement.endPosition, model)
+  }, Cesium.ScreenSpaceEventType.MOUSE_MOVE)
+}
+
+function setHover(entity) {
     hoveredEntity = entity
     if (entity.model) {
       entity.model.silhouetteSize = 3
@@ -212,27 +276,36 @@ function bindHoverHandler() {
     if (entity.point) entity.point.pixelSize = 14
 
     viewer.canvas.style.cursor = 'pointer'
-    popup.visible = true
-    popup.x = movement.endPosition.x + 14
-    popup.y = movement.endPosition.y + 14
-    popup.name = model.metadata?.name ?? model.id
-    popup.type = model.metadata?.type ?? 'IoT Sensor'
-    popup.value = formatSensorValue(model)
-  }, Cesium.ScreenSpaceEventType.MOUSE_MOVE)
 }
 
 function clearHover() {
   if (!hoveredEntity) return
-  const model = props.models.find((item) => item.id === hoveredEntity.id)
+  const modelId = hoveredEntity.properties?.modelId?.getValue()
+  const model = modelsById.get(modelId)
   if (hoveredEntity.model) {
     hoveredEntity.model.silhouetteSize = 0
     hoveredEntity.model.colorBlendAmount = 0.25
   }
   if (hoveredEntity.point && model) hoveredEntity.point.pixelSize = pulsingSize(model)
   hoveredEntity = undefined
+  popup.visible = false
+  if (viewer && !viewer.isDestroyed()) viewer.canvas.style.cursor = ''
+}
+
+function updatePopup(position, model) {
+  const bounds = containerRef.value?.getBoundingClientRect()
+  const maxX = Math.max((bounds?.width ?? 0) - 180, 8)
+  const maxY = Math.max((bounds?.height ?? 0) - 90, 8)
+  popup.visible = true
+  popup.x = Math.min(position.x + 14, maxX)
+  popup.y = Math.min(position.y + 14, maxY)
+  popup.name = model.metadata?.name ?? model.id
+  popup.type = model.metadata?.type ?? 'IoT Sensor'
+  popup.value = formatSensorValue(model)
 }
 
 async function applyLayers(layers) {
+  if (isDestroyed || !viewer || viewer.isDestroyed()) return
   const showModels = layers.models !== false
   const showSensors = layers.sensors !== false
 
@@ -245,7 +318,9 @@ async function applyLayers(layers) {
   if (layers.buildings) {
     if (!osmBuildings) {
       try {
-        osmBuildings = await Cesium.createOsmBuildingsAsync()
+        const buildings = await Cesium.createOsmBuildingsAsync()
+        if (isDestroyed || !viewer || viewer.isDestroyed()) return
+        osmBuildings = buildings
         viewer.scene.primitives.add(osmBuildings)
       } catch (error) {
         console.warn('Unable to load Cesium OSM buildings', error)
@@ -264,7 +339,7 @@ function bindClickHandler() {
     const entity = picked?.id
     const modelId = entity?.properties?.modelId?.getValue()
     const sensorId = entity?.properties?.sensorId?.getValue()
-    const model = props.models.find((item) => item.id === modelId)
+    const model = modelsById.get(modelId)
 
     if (model && sensorId) {
       emit('sensor-selected', sensorId)
@@ -310,13 +385,13 @@ function statusColor(value = 0) {
 function pulsingColor(model) {
   return new Cesium.CallbackProperty(() => {
     const alpha = 0.72 + Math.sin(Date.now() / 260) * 0.22
-    return statusColor(model.statusValue).withAlpha(alpha)
+    return statusColor(getModelStatusValue(model)).withAlpha(alpha)
   }, false)
 }
 
 function pulsingSize(model) {
   return new Cesium.CallbackProperty(() => {
-    const amplitude = getStatusLevel(model.statusValue) === 'normal' ? 1 : 2.4
+    const amplitude = getStatusLevel(getModelStatusValue(model)) === 'normal' ? 1 : 2.4
     return 10 + Math.sin(Date.now() / 220) * amplitude
   }, false)
 }
@@ -326,6 +401,11 @@ function formatSensorValue(model) {
   const unit = model.metadata?.unit ?? ''
   if (value === undefined || value === null) return 'No value'
   return `${value} ${unit}`.trim()
+}
+
+function getModelStatusValue(model) {
+  const value = Number(model.metadata?.value ?? model.statusValue)
+  return Number.isFinite(value) ? value : 0
 }
 
 function normalizeDegrees(value) {
