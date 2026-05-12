@@ -1,0 +1,175 @@
+# Quiz 4 
+
+
+
+## Step 1
+請ChatGPT先規劃專案以及撰寫給Codex的Prompt
+
+* Prompt to ChatGPT
+```
+請幫我規劃以下專案，幫我寫一套 Codex專用 prompt: 
+可以讀取glb 3d. 文件。
+可以顯示指南針、google小地圖、等相關畫面panel 可以自行設計。越多越加分
+點擊某一個3d 物件 可以show 出他的IOT數據 。 
+數據以折線圖方式 x為時間，Ｙ為數值。（數據可以是任意產生或是讀取CSV 或是任何網路上的open data)
+可以部署到github
+```
+
+
+
+## Step 2
+把ChatGPT的Response依序給Codex CLI (gpt-5.5-low)執行
+
+
+1. 第一個 Prompt（生成整個專案架構）
+```
+Create a web project with the following requirements.
+
+Tech stack:
+- Vue 3
+- Vite
+- Cesium for 3D visualization
+- ECharts for time-series charts
+
+Project features:
+1. Load and display GLB / glTF 3D models in a Cesium scene.
+2. Each model represents an IoT device.
+3. When clicking a 3D model, display IoT sensor data.
+4. IoT data should be shown as a line chart.
+5. X-axis = time
+6. Y-axis = sensor value.
+
+UI Panels:
+- Compass
+- Mini map
+- Layer control panel
+- IoT data chart panel
+
+Project structure should include:
+
+src/
+components/
+core/
+data/
+public/models/
+public/data/
+
+Prepare the project to be deployed to GitHub Pages.
+
+Generate all necessary files.
+```
+
+2. 第二個 Prompt（3D GLB 載入）
+```
+Implement a Cesium viewer component.
+
+Requirements:
+- Initialize Cesium viewer
+- Load glb models from /public/models
+- Place models using longitude, latitude, height
+- Allow multiple models
+- Each model should have an id and metadata
+
+Example models:
+sensor1.glb
+sensor2.glb
+
+Create a reusable component called CesiumViewer.vue.
+```
+
+3. 第三個 Prompt（點擊 3D 物件）
+```
+Add click interaction to the Cesium viewer.
+
+When a user clicks a glb model:
+- Identify which model was clicked
+- Retrieve the sensor id
+- Emit an event with the sensor id
+
+Example:
+
+click model -> sensor_id -> show IoT data
+```
+
+4. 第四個 Prompt（IoT 折線圖）
+```
+Create an IoTChart component using ECharts.
+
+Requirements:
+- Line chart
+- X-axis = time
+- Y-axis = value
+
+Data sources:
+1. Random generated data
+2. CSV file from /public/data/iot.csv
+
+The chart should update when a sensor id is selected.
+```
+
+5. 第五個 Prompt（UI Panels）
+```
+Create a dashboard layout for the app.
+
+Panels required:
+
+1. Compass panel
+Display the camera heading.
+
+2. Mini map panel
+Use Leaflet to show a small map.
+
+3. Layer control panel
+Allow toggling:
+- IoT models
+- Buildings
+- Sensors
+
+4. IoT data panel
+Display the ECharts time-series chart.
+
+Design a responsive layout with panels around the 3D scene.
+```
+
+6. 第六個 Prompt（假 IoT 數據）
+```
+Create a fake IoT data generator.
+
+For each sensor:
+generate time-series data for 24 hours.
+
+Example:
+
+time,value
+00:00,20
+01:00,22
+02:00,19
+
+Return data as JSON for chart visualization.
+```
+
+7. 第七個 Prompt（加分功能）
+```
+Add visual enhancements:
+
+1. Highlight model when hovered.
+2. Show popup with sensor information.
+3. Animate sensor status color depending on value.
+4. Add play/pause time animation for IoT data.
+```
+
+8. 第八個 Prompt（GitHub deploy）
+```
+Prepare the project for GitHub Pages deployment.
+
+Requirements:
+
+- Build with Vite
+- Output to /dist
+- Configure base path
+- Add GitHub Actions workflow to deploy automatically
+
+Generate:
+
+.github/workflows/deploy.yml
+```
