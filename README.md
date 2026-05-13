@@ -1,6 +1,15 @@
 # Cesium IoT Dashboard
 
+<b>This is Codex-generated README.</b>
+
+<b>For understanding how to generate this website by collaborating with Codex, please see <a href="./README_RECORD.md">README_RECORD</a>.</b>
+
+<hr>
+
+🔗 https://sabrinaliuu.github.io/quiz4/
+
 Vue 3 + Vite project for displaying IoT devices as GLB/glTF models in a Cesium 3D scene with ECharts time-series sensor panels.
+
 
 ## Run locally
 
