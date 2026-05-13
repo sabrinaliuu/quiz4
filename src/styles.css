@@ -61,12 +61,13 @@ input {
 
 .left-panels {
   align-items: flex-start;
-  justify-content: space-between;
 }
 
 .right-panels {
-  align-items: flex-end;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+  height: 20%;
 }
 
 .panel-title {
