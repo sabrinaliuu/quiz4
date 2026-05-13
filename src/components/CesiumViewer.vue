@@ -8,7 +8,6 @@
     >
       <strong>{{ popup.name }}</strong>
       <span>{{ popup.type }}</span>
-      <b>{{ popup.value }}</b>
     </div>
   </section>
 </template>
@@ -21,48 +20,50 @@ import { assetUrl } from '../core/paths'
 const props = defineProps({
   models: {
     type: Array,
-    default: () => [
-      {
-        id: 'sensor-1',
-        url: assetUrl('models/sensor1.glb'),
-        longitude: 121.5654,
-        latitude: 25.033,
-        height: 40,
-        sensor_id: 'sensor-1',
-        metadata: { name: 'Sensor 1', type: 'IoT Sensor' }
-      },
-      {
-        id: 'sensor-2',
-        url: assetUrl('models/sensor2.glb'),
-        longitude: 121.568,
-        latitude: 25.035,
-        height: 55,
-        sensor_id: 'sensor-2',
-        metadata: { name: 'Sensor 2', type: 'IoT Sensor' }
-      }
-    ]
+    default: null
   },
   selectedModelId: { type: String, default: '' },
   showLabels: { type: Boolean, default: true },
   autoZoom: { type: Boolean, default: true },
+  activeTool: { type: String, default: '' },
+  command: { type: Object, default: null },
+  terrainExaggeration: { type: Number, default: 1 },
   layers: {
     type: Object,
-    default: () => ({ models: true, buildings: false, sensors: true })
+    default: () => ({ models: true, buildings: false, sensors: true, terrain: true })
   }
 })
 
-const emit = defineEmits(['camera-change', 'model-click', 'sensor-selected', 'viewer-ready'])
+const emit = defineEmits([
+  'camera-change',
+  'coordinate-change',
+  'measurement-change',
+  'model-click',
+  'sensor-selected',
+  'viewer-ready'
+])
 const containerRef = ref(null)
 const entitiesById = new Map()
 const modelsById = new Map()
 let viewer
 let clickHandler
 let hoverHandler
+let moveHandler
 let osmBuildings
 let cameraChangedUnsubscribe
 let hoveredEntity
 let isDestroyed = false
 let hasZoomed = false
+let terrainRequestId = 0
+let terrainEnabled
+let measurementPoints = []
+let measurementEntities = []
+
+const defaultView = {
+  longitude: 121.5645,
+  latitude: 25.0339,
+  height: 1600
+}
 
 const popup = reactive({
   visible: false,
@@ -73,28 +74,36 @@ const popup = reactive({
   value: ''
 })
 
-onMounted(() => {
+onMounted(async () => {
   isDestroyed = false
+  terrainEnabled = props.layers.terrain !== false
+  const terrainProvider = await createTerrainProvider(terrainEnabled)
+  if (isDestroyed) return
+
   viewer = new Cesium.Viewer(containerRef.value, {
     animation: false,
-    baseLayerPicker: true,
+    baseLayerPicker: false,
     fullscreenButton: false,
     geocoder: false,
-    homeButton: true,
+    homeButton: false,
     infoBox: false,
     sceneModePicker: false,
     selectionIndicator: false,
     timeline: false,
-    navigationHelpButton: false
+    navigationHelpButton: false,
+    terrainProvider
   })
 
+  viewer.scene.globe.enableLighting = true
   viewer.scene.globe.depthTestAgainstTerrain = true
+  viewer.scene.globe.terrainExaggeration = props.terrainExaggeration
   viewer.scene.skyAtmosphere.show = true
 
   loadModels(props.models)
   applyLayers(props.layers)
   bindClickHandler()
   bindHoverHandler()
+  bindMoveHandler()
   bindCameraHandler()
   emit('viewer-ready', viewer)
 })
@@ -127,11 +136,37 @@ watch(
   }
 )
 
+watch(
+  () => props.command,
+  (command) => {
+    if (!viewer || !command) return
+    runCommand(command.type)
+  }
+)
+
+watch(
+  () => props.activeTool,
+  () => {
+    measurementPoints = []
+    clearMeasurementEntities()
+    emit('measurement-change', null)
+  }
+)
+
+watch(
+  () => props.terrainExaggeration,
+  (value) => {
+    if (!viewer || viewer.isDestroyed()) return
+    viewer.scene.globe.terrainExaggeration = value
+  }
+)
+
 onBeforeUnmount(() => {
   isDestroyed = true
   cameraChangedUnsubscribe?.()
   clickHandler?.destroy()
   hoverHandler?.destroy()
+  moveHandler?.destroy()
   viewer?.destroy()
   entitiesById.clear()
   modelsById.clear()
@@ -162,6 +197,7 @@ function loadModels(models, options = {}) {
       id: model.id,
       name: model.metadata?.name ?? model.id,
       position: Cesium.Cartesian3.fromDegrees(model.longitude, model.latitude, model.height ?? 0),
+      heightReference: getHeightReference(model),
       model: {
         uri: model.url,
         show: props.layers.models !== false,
@@ -180,7 +216,7 @@ function loadModels(models, options = {}) {
         color: pulsingColor(model),
         outlineColor: Cesium.Color.WHITE,
         outlineWidth: 2,
-        heightReference: Cesium.HeightReference.NONE
+        heightReference: getHeightReference(model)
       },
       label: props.showLabels
         ? {
@@ -192,6 +228,7 @@ function loadModels(models, options = {}) {
             outlineWidth: 3,
             style: Cesium.LabelStyle.FILL_AND_OUTLINE,
             pixelOffset: new Cesium.Cartesian2(0, -44),
+            heightReference: getHeightReference(model),
             distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 8000)
           }
         : undefined,
@@ -208,7 +245,7 @@ function loadModels(models, options = {}) {
 
   if (zoom && entities.length) {
     hasZoomed = true
-    void viewer.zoomTo(entities, new Cesium.HeadingPitchRange(0, -0.65, 1400)).catch((error) => {
+    void viewer.zoomTo(entities, new Cesium.HeadingPitchRange(0, -0.65, 7000)).catch((error) => {
       if (!isDestroyed) console.warn('Unable to zoom to Cesium models', error)
     })
   }
@@ -217,6 +254,7 @@ function loadModels(models, options = {}) {
 function updateModelEntity(entity, model) {
   entity.name = model.metadata?.name ?? model.id
   entity.position = Cesium.Cartesian3.fromDegrees(model.longitude, model.latitude, model.height ?? 0)
+  entity.heightReference = getHeightReference(model)
 
   if (entity.model) {
     entity.model.uri = model.url
@@ -225,6 +263,7 @@ function updateModelEntity(entity, model) {
     entity.model.minimumPixelSize = model.minimumPixelSize ?? 72
     entity.model.maximumScale = model.maximumScale ?? 240
     entity.model.scale = model.scale ?? 1
+    entity.model.heightReference = getHeightReference(model)
   }
 
   if (entity.point) {
@@ -236,6 +275,7 @@ function updateModelEntity(entity, model) {
   if (entity.label) {
     entity.label.show = props.layers.sensors !== false && props.showLabels
     entity.label.text = model.metadata?.name ?? model.id
+    entity.label.heightReference = getHeightReference(model)
   }
 
   entity.properties = {
@@ -264,6 +304,14 @@ function bindHoverHandler() {
     }
 
     updatePopup(movement.endPosition, model)
+  }, Cesium.ScreenSpaceEventType.MOUSE_MOVE)
+}
+
+function bindMoveHandler() {
+  moveHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas)
+  moveHandler.setInputAction((movement) => {
+    const coordinate = pickCoordinate(movement.endPosition)
+    if (coordinate) emit('coordinate-change', coordinate)
   }, Cesium.ScreenSpaceEventType.MOUSE_MOVE)
 }
 
@@ -309,6 +357,8 @@ async function applyLayers(layers) {
   const showModels = layers.models !== false
   const showSensors = layers.sensors !== false
 
+  await setTerrainEnabled(layers.terrain !== false)
+
   viewer.entities.values.forEach((entity) => {
     if (entity.model) entity.model.show = showModels
     if (entity.point) entity.point.show = showSensors
@@ -332,9 +382,37 @@ async function applyLayers(layers) {
   }
 }
 
+async function setTerrainEnabled(enabled) {
+  if (terrainEnabled === enabled) return
+  terrainEnabled = enabled
+  const requestId = ++terrainRequestId
+  const provider = await createTerrainProvider(enabled)
+  if (requestId !== terrainRequestId || isDestroyed || !viewer || viewer.isDestroyed()) return
+  viewer.terrainProvider = provider
+}
+
+async function createTerrainProvider(enabled) {
+  if (!enabled) return new Cesium.EllipsoidTerrainProvider()
+
+  try {
+    return await Cesium.createWorldTerrainAsync({
+      requestVertexNormals: true,
+      requestWaterMask: true
+    })
+  } catch (error) {
+    console.warn('Unable to load Cesium World Terrain; using ellipsoid terrain', error)
+    return new Cesium.EllipsoidTerrainProvider()
+  }
+}
+
 function bindClickHandler() {
   clickHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas)
   clickHandler.setInputAction((movement) => {
+    if (props.activeTool === 'distance' || props.activeTool === 'area') {
+      addMeasurementPoint(movement.position)
+      return
+    }
+
     const picked = viewer.scene.pick(movement.position)
     const entity = picked?.id
     const modelId = entity?.properties?.modelId?.getValue()
@@ -356,8 +434,15 @@ function bindClickHandler() {
 
 function bindCameraHandler() {
   const emitHeading = () => {
+    const cartographic = Cesium.Cartographic.fromCartesian(viewer.camera.positionWC)
     const heading = Cesium.Math.toDegrees(viewer.camera.heading)
-    emit('camera-change', { heading: normalizeDegrees(heading) })
+    emit('camera-change', {
+      longitude: Cesium.Math.toDegrees(cartographic.longitude),
+      latitude: Cesium.Math.toDegrees(cartographic.latitude),
+      height: cartographic.height,
+      heading: normalizeDegrees(heading),
+      pitch: Cesium.Math.toDegrees(viewer.camera.pitch)
+    })
   }
 
   emitHeading()
@@ -365,8 +450,144 @@ function bindCameraHandler() {
   cameraChangedUnsubscribe = () => viewer?.camera.changed.removeEventListener(emitHeading)
 }
 
+function runCommand(type) {
+  if (type === 'zoom-in') viewer.camera.zoomIn(viewer.camera.positionCartographic.height * 0.35)
+  if (type === 'zoom-out') viewer.camera.zoomOut(viewer.camera.positionCartographic.height * 0.35)
+  if (type === 'home') flyHome()
+  if (type === 'north') resetNorth()
+}
+
+function flyHome() {
+  viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(defaultView.longitude, defaultView.latitude, defaultView.height),
+    orientation: {
+      heading: 0,
+      pitch: Cesium.Math.toRadians(-45),
+      roll: 0
+    },
+    duration: 0.8
+  })
+}
+
+function resetNorth() {
+  const cartographic = viewer.camera.positionCartographic
+  viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromRadians(
+      cartographic.longitude,
+      cartographic.latitude,
+      cartographic.height
+    ),
+    orientation: {
+      heading: 0,
+      pitch: viewer.camera.pitch,
+      roll: 0
+    },
+    duration: 0.5
+  })
+}
+
+function addMeasurementPoint(position) {
+  const coordinate = pickCoordinate(position)
+  if (!coordinate) return
+  measurementPoints.push(coordinate)
+  drawMeasurement()
+}
+
+function drawMeasurement() {
+  clearMeasurementEntities()
+  const positions = measurementPoints.map((point) =>
+    Cesium.Cartesian3.fromDegrees(point.longitude, point.latitude, point.height)
+  )
+
+  positions.forEach((position) => {
+    measurementEntities.push(
+      viewer.entities.add({
+        position,
+        point: {
+          pixelSize: 8,
+          color: Cesium.Color.fromCssColorString('#f0c85a'),
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 2
+        }
+      })
+    )
+  })
+
+  if (positions.length >= 2) {
+    measurementEntities.push(
+      viewer.entities.add({
+        polyline: {
+          positions: props.activeTool === 'area' && positions.length > 2 ? [...positions, positions[0]] : positions,
+          width: 3,
+          material: Cesium.Color.fromCssColorString('#f0c85a')
+        }
+      })
+    )
+  }
+
+  if (props.activeTool === 'area' && positions.length >= 3) {
+    measurementEntities.push(
+      viewer.entities.add({
+        polygon: {
+          hierarchy: positions,
+          material: Cesium.Color.fromCssColorString('#f0c85a').withAlpha(0.24)
+        }
+      })
+    )
+    emit('measurement-change', { type: 'area', value: calculateAreaSqKm(measurementPoints) })
+  } else if (props.activeTool === 'distance' && positions.length >= 2) {
+    emit('measurement-change', { type: 'distance', value: calculateDistanceKm(measurementPoints) })
+  }
+}
+
+function clearMeasurementEntities() {
+  measurementEntities.forEach((entity) => viewer?.entities.remove(entity))
+  measurementEntities = []
+}
+
+function pickCoordinate(windowPosition) {
+  const picked = viewer.scene.pickPositionSupported ? viewer.scene.pickPosition(windowPosition) : undefined
+  const cartesian = picked ?? viewer.camera.pickEllipsoid(windowPosition, viewer.scene.globe.ellipsoid)
+  if (!cartesian) return null
+
+  const cartographic = Cesium.Cartographic.fromCartesian(cartesian)
+  return {
+    longitude: Cesium.Math.toDegrees(cartographic.longitude),
+    latitude: Cesium.Math.toDegrees(cartographic.latitude),
+    height: cartographic.height
+  }
+}
+
+function calculateDistanceKm(points) {
+  let meters = 0
+  for (let index = 1; index < points.length; index += 1) {
+    const start = Cesium.Cartographic.fromDegrees(points[index - 1].longitude, points[index - 1].latitude)
+    const end = Cesium.Cartographic.fromDegrees(points[index].longitude, points[index].latitude)
+    meters += new Cesium.EllipsoidGeodesic(start, end).surfaceDistance
+  }
+  return meters / 1000
+}
+
+function calculateAreaSqKm(points) {
+  const radians = points.map((point) => ({
+    lon: Cesium.Math.toRadians(point.longitude),
+    lat: Cesium.Math.toRadians(point.latitude)
+  }))
+  let total = 0
+  for (let index = 0; index < radians.length; index += 1) {
+    const current = radians[index]
+    const next = radians[(index + 1) % radians.length]
+    total += (next.lon - current.lon) * (2 + Math.sin(current.lat) + Math.sin(next.lat))
+  }
+  return Math.abs((total * Cesium.Ellipsoid.WGS84.maximumRadius ** 2) / 2) / 1000000
+}
+
 function getSensorId(model) {
   return model.sensor_id ?? model.sensorId ?? model.metadata?.sensor_id ?? model.metadata?.sensorId ?? model.id
+}
+
+function getHeightReference(model) {
+  return model.heightReference ?? Cesium.HeightReference.RELATIVE_TO_GROUND
 }
 
 function getStatusLevel(value = 0) {
