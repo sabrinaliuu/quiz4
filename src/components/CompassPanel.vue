@@ -1,11 +1,11 @@
 <template>
   <aside class="panel compass-panel" aria-label="Compass">
     <p class="panel-title">Compass</p>
-    <div class="compass-face">
+    <button class="compass-face" type="button" title="Reset north" @click="$emit('reset-north')">
       <div class="needle" :style="{ transform: `translateX(-50%) rotate(${heading}deg)` }"></div>
       <span>N</span>
-    </div>
-    <strong>{{ normalizedHeading }}°</strong>
+    </button>
+    <strong>{{ normalizedHeading }} deg</strong>
   </aside>
 </template>
 
@@ -16,25 +16,28 @@ const props = defineProps({
   heading: { type: Number, default: 0 }
 })
 
+defineEmits(['reset-north'])
+
 const normalizedHeading = computed(() => Math.round((props.heading + 360) % 360))
 </script>
 
 <style scoped>
 .compass-panel {
   display: grid;
-  gap: 10px;
-  width: 150px;
+  gap: 8px;
   padding: 14px;
   justify-items: center;
 }
 
 .compass-face {
   position: relative;
-  width: 74px;
-  height: 74px;
+  width: 60px;
+  height: 60px;
+  padding: 0;
   border: 2px solid rgb(255 255 255 / 24%);
   border-radius: 50%;
   background: rgb(255 255 255 / 5%);
+  cursor: pointer;
 }
 
 .needle {
@@ -60,6 +63,6 @@ span {
 
 strong {
   color: #55c3a5;
-  font-size: 18px;
+  font-size: 14px;
 }
 </style>
