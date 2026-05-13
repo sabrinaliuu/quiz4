@@ -2,30 +2,24 @@ import { assetUrl } from '../core/paths'
 
 export const devices = [
   {
-    id: 'pump-01',
-    name: 'Pump Station 01',
-    type: 'Pressure Sensor',
-    position: { longitude: 121.5654, latitude: 25.033, height: 40 },
+    id: 'weather-01',
+    name: 'Taipei 101',
+    position: { longitude: 121.5645, latitude: 25.0339, height: 400 },
     modelUrl: assetUrl('models/sample-device/device.gltf'),
-    dataUrl: assetUrl('data/pump-01.json'),
-    sensor: { name: 'Pressure', unit: 'kPa' }
+    dataUrl: assetUrl('data/pump-01.json')
   },
   {
-    id: 'meter-02',
-    name: 'Power Meter 02',
-    type: 'Energy Meter',
-    position: { longitude: 121.568, latitude: 25.035, height: 55 },
+    id: 'weather-02',
+    name: 'SongShan Airport',
+    position: { longitude: 121.5516, latitude: 25.0640, height: 35 },
     modelUrl: assetUrl('models/sample-device/device.gltf'),
-    dataUrl: assetUrl('data/meter-02.json'),
-    sensor: { name: 'Power', unit: 'kW' }
+    dataUrl: assetUrl('data/meter-02.json')
   },
   {
     id: 'weather-03',
-    name: 'Weather Node 03',
-    type: 'Weather Station',
-    position: { longitude: 121.5628, latitude: 25.0362, height: 65 },
+    name: 'Daan Park',
+    position: { longitude: 121.5354, latitude: 25.0284, height: 30 },
     modelUrl: assetUrl('models/sample-device/device.gltf'),
-    dataUrl: assetUrl('data/weather-03.json'),
-    sensor: { name: 'Temperature', unit: 'C' }
+    dataUrl: assetUrl('data/weather-03.json')
   }
 ]

@@ -1,94 +1,67 @@
 <template>
   <div class="iot-chart-shell">
-    <button class="play-button" type="button" @click="togglePlayback">
-      {{ isPlaying ? 'Pause' : 'Play' }}
-    </button>
     <div ref="chartRef" class="iot-chart"></div>
   </div>
 </template>
 
 <script setup>
 import * as echarts from 'echarts'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { assetUrl } from '../core/paths'
-import { generateSensorSeries } from '../data/iotDataGenerator'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { generateStationMetrics } from '../data/iotDataGenerator'
 
 const props = defineProps({
   sensorId: { type: String, default: '' },
-  source: {
-    type: String,
-    default: 'csv',
-    validator: (value) => ['csv', 'random'].includes(value)
-  },
-  csvUrl: { type: String, default: () => assetUrl('data/iot.csv') },
-  yAxisName: { type: String, default: 'value' },
-  seriesName: { type: String, default: 'Sensor value' }
+  yAxisName: { type: String, default: 'value' }
 })
 
 const emit = defineEmits(['data-change'])
 const chartRef = ref(null)
-const csvRows = ref([])
 const currentData = ref([])
-const frameIndex = ref(0)
-const isPlaying = ref(false)
+const generatedDataBySensor = new Map()
 let chart
-let playbackTimer
 
 onMounted(async () => {
   chart = echarts.init(chartRef.value)
-  await loadCsv()
   renderChart()
   window.addEventListener('resize', resizeChart)
 })
 
-watch(
-  () => [props.sensorId, props.source, props.csvUrl],
-  async ([, source]) => {
-    if (source === 'csv' && !csvRows.value.length) await loadCsv()
-    renderChart()
-  }
-)
+watch(() => props.sensorId, renderChart)
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', resizeChart)
-  stopPlayback()
   chart?.dispose()
 })
-
-const visibleData = computed(() => {
-  if (!isPlaying.value) return currentData.value
-  return currentData.value.slice(0, Math.max(frameIndex.value, 1))
-})
-
-async function loadCsv() {
-  if (props.source !== 'csv') return
-
-  try {
-    const response = await fetch(props.csvUrl)
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const text = await response.text()
-    csvRows.value = parseCsv(text)
-  } catch (error) {
-    console.warn('Unable to load IoT CSV data', error)
-    csvRows.value = []
-  }
-}
 
 async function renderChart() {
   await nextTick()
   if (!chart) return
 
-  currentData.value = props.source === 'random' ? createRandomData(props.sensorId) : getCsvData(props.sensorId)
-  frameIndex.value = currentData.value.length
-  drawChart(visibleData.value)
-  emit('data-change', visibleData.value)
+  currentData.value = createRandomData(props.sensorId)
+  drawChart(currentData.value)
+  emit('data-change', currentData.value.at(-1) ?? null)
 }
 
 function drawChart(data) {
   if (!chart) return
 
+  const seriesDefs = [
+    { key: 'temperature', name: 'Temperature', color: '#55c3a5', unit: 'C' },
+    { key: 'energy', name: 'Energy', color: '#f0c85a', unit: 'kW' },
+    { key: 'windSpeed', name: 'Wind Speed', color: '#7aa2ff', unit: 'm/s' },
+    { key: 'pressure', name: 'Pressure', color: '#ee6b5f', unit: 'hPa' },
+    { key: 'aqi', name: 'AQI', color: '#c47dff', unit: '' }
+  ]
+
   chart.setOption({
-    grid: { left: 46, right: 20, top: 28, bottom: 34 },
+    grid: { left: 52, right: 20, top: 42, bottom: 34 },
+    legend: {
+      top: 8,
+      left: 8,
+      textStyle: { color: '#dbe4e8' },
+      itemWidth: 14,
+      itemHeight: 8
+    },
     tooltip: { trigger: 'axis' },
     xAxis: {
       type: 'time',
@@ -98,82 +71,40 @@ function drawChart(data) {
     },
     yAxis: {
       type: 'value',
-      name: props.yAxisName,
+      name: '',
       nameTextStyle: { color: '#b9c2c7' },
       axisLabel: { color: '#b9c2c7' },
       splitLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } }
     },
-    series: [
-      {
-        name: props.seriesName,
-        type: 'line',
-        smooth: true,
-        showSymbol: false,
-        lineStyle: { width: 3, color: '#55c3a5' },
-        areaStyle: { color: 'rgba(85, 195, 165, 0.16)' },
-        data: data.map((point) => [toChartTime(point.time), point.value])
-      }
-    ]
+    series: seriesDefs.map((series) => ({
+      name: series.name,
+      type: 'line',
+      smooth: true,
+      showSymbol: false,
+      lineStyle: { width: 2.5, color: series.color },
+      itemStyle: {
+        color: series.color, // 設定點的填充顏色
+        borderColor: '#fff', // 選擇性：增加白邊讓點更清晰
+        borderWidth: 1
+      },
+      areaStyle: undefined,
+      data: data.map((point) => [toChartTime(point.time), normalizeSeriesValue(point[series.key], series.key)])
+    }))
   })
-}
-
-function togglePlayback() {
-  if (isPlaying.value) {
-    stopPlayback()
-    frameIndex.value = currentData.value.length
-    drawChart(currentData.value)
-    emit('data-change', currentData.value)
-    return
-  }
-
-  if (!currentData.value.length) renderChart()
-  isPlaying.value = true
-  frameIndex.value = 1
-  drawChart(visibleData.value)
-  emit('data-change', visibleData.value)
-
-  playbackTimer = window.setInterval(() => {
-    frameIndex.value += 1
-    if (frameIndex.value > currentData.value.length) frameIndex.value = 1
-    drawChart(visibleData.value)
-    emit('data-change', visibleData.value)
-  }, 650)
-}
-
-function stopPlayback() {
-  isPlaying.value = false
-  if (playbackTimer) {
-    window.clearInterval(playbackTimer)
-    playbackTimer = undefined
-  }
-}
-
-function getCsvData(sensorId) {
-  return csvRows.value
-    .filter((row) => row.sensor_id === sensorId)
-    .map((row) => ({ time: row.time, value: Number(row.value) }))
-    .filter((point) => point.time && Number.isFinite(point.value))
 }
 
 function createRandomData(sensorId) {
-  return generateSensorSeries(sensorId || 'sensor', { hours: 24 })
+  const key = sensorId || 'sensor'
+  if (!generatedDataBySensor.has(key)) {
+    generatedDataBySensor.set(key, generateStationMetrics(key))
+  }
+
+  return generatedDataBySensor.get(key)
 }
 
-function parseCsv(text) {
-  const lines = text
-    .trim()
-    .split(/\r?\n/)
-    .filter(Boolean)
-
-  const headers = splitCsvLine(lines.shift() ?? '')
-  return lines.map((line) => {
-    const values = splitCsvLine(line)
-    return Object.fromEntries(headers.map((header, index) => [header, values[index] ?? '']))
-  })
-}
-
-function splitCsvLine(line) {
-  return line.split(',').map((value) => value.trim().replace(/^"|"$/g, ''))
+function normalizeSeriesValue(value, key) {
+  if (key === 'pressure') return (value / 100).toFixed(4)
+  return value
 }
 
 function toChartTime(time) {

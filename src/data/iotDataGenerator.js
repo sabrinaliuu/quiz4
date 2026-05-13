@@ -1,3 +1,7 @@
+export function generateHourlyIoTData() {
+  return generateStationMetrics('station')
+}
+
 export function generateSensorSeries(sensorId, options = {}) {
   const {
     hours = 24,
@@ -52,4 +56,38 @@ function seededNoise(sensorId, hour) {
     .reduce((total, character, index) => total + character.charCodeAt(0) * (index + 1), 0)
   const value = Math.sin(seed * 12.9898 + hour * 78.233) * 43758.5453
   return value - Math.floor(value) - 0.5
+}
+
+export function generateStationMetrics(sensorId, options = {}) {
+  const hours = options.hours ?? 24
+  const startTime = options.startTime ?? startOfToday()
+  const metrics = [
+    { key: 'temperature', min: 15, max: 30, base: 22, variance: 4.5 },
+    { key: 'energy', min: 15, max: 85, base: 42, variance: 11 },
+    { key: 'windSpeed', min: 0, max: 24, base: 8, variance: 4.2 },
+    { key: 'pressure', min: 980, max: 1035, base: 1008, variance: 5.5 },
+    { key: 'aqi', min: 0, max: 180, base: 70, variance: 24 }
+  ]
+
+  return Array.from({ length: hours }, (_, hour) => {
+    const time = new Date(startTime.getTime() + hour * 60 * 60 * 1000)
+    const point = { time: formatHour(time) }
+
+    metrics.forEach((metric) => {
+      point[metric.key] = valueForMetric(sensorId, hour, metric)
+    })
+
+    return point
+  })
+}
+
+function valueForMetric(sensorId, hour, metric) {
+  const wave = Math.sin((hour / 24) * Math.PI * 2 + metric.base / 10) * metric.variance
+  const noise = seededNoise(`${sensorId}-${metric.key}`, hour) * metric.variance * 0.7
+  const value = metric.base + wave + noise
+  return Number(clamp(value, metric.min, metric.max).toFixed(metric.key === 'pressure' ? 1 : 2))
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value))
 }
